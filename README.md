@@ -1,3 +1,3 @@
 # CSC2510
-auhtor: Not the Real Author
+auhtor: Oops
 date: 1/23/2024
