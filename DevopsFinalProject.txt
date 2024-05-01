@@ -1,0 +1,127 @@
+#Author: Julian Trujillo
+#Date: May 1st,2024
+#Purpose:To read in a Json file to automate the set up of Virtual Machines for a company
+
+#! /bin/bash
+
+#reads in the parameters and assigns them to corresponding variable
+intExteralIpAddress=$1
+intTicketID=$2
+
+#installs JQ in order manipulate the JSON file we are going to Curl 
+sudo apt-get update
+sudo apt-get install jq -y
+clear
+
+#curls the JSON array to arrResults
+arrResults=$(curl https://www.swollenhippo.com/ServiceNow/systems/devTickets.php)
+
+#Gets the length of the softwarePackages attribute array of the ticket we are working with
+intLength=$(echo "$arrResults" | jq --arg intTicketID "$intTicketID" '.[] | select(.ticketID == ($intTicketID | tonumber)) | .softwarePackages | length')
+
+#Reads in the Requestor attribute of the corresponding ticket ID
+strRequestor=$(echo "$arrResults" | jq -r --arg intTicketID "$intTicketID" '.[] | select(.ticketID == ($intTicketID | tonumber)) | .requestor')
+
+#Reads in the standardConfig attribute from the corresponding ticket ID
+strConfigType=$(echo "$arrResults" | jq -r --arg intTicketID "$intTicketID" '.[] | select(.ticketID == ($intTicketID | tonumber)) | .standardConfig')
+
+#reads in the current date and time as to create a time stamp of when we have "officially" started the ticket process
+current_date=$(date +"%d-%b-%Y %H:%M")
+
+#creates the strFileName which will be the file name we will be keeping our log of each ticket in
+strFileName="$intTicketID.log"
+
+#writes the Generic aspect of the ticket first based on information we are able to gather just from the ticket
+echo "TicketID: $intTicketID" >> $strFileName
+echo "Start DateTime: $current_date" >> $strFileName
+echo "Requestor: $strRequestor" >> $strFileName
+echo "External IP Address: $intExteralIpAddress" >> $strFileName
+#echo "Hostname: "$(hostname)"" >> $strFileName
+echo "Hostname: devops-final-server4">>$strFileName
+echo "Standard Config: $strConfigType" >> $strFileName
+echo "" >> $strFileName
+
+#While-loop that will iterate over all of the softwarePackages that were in the json array index associated with the intTicketID variable
+intCounter=0
+while [ $intCounter -lt $intLength ]; do
+
+#reads in the "install" portion of the corresponding softwarePackage attribute
+softwarePackage=$(echo "$arrResults" | jq -r --arg intTicketID "$intTicketID" --argjson intCounter "$intCounter" '.[] | select(.ticketID == ($intTicketID | tonumber)) | .softwarePackages[$intCounter | tonumber].install')
+
+#reads in the name of the softwarePackage we are wanting to install
+strPackageName=$(echo "$arrResults" | jq -r --arg intTicketID "$intTicketID" --argjson intCounter "$intCounter" '.[] | select(.ticketID == ($intTicketID | tonumber)) | .softwarePackages[$intCounter | tonumber].name')
+
+#installs the current softwarePackage automatically by using the -y to auto input yes
+sudo apt-get install $softwarePackage -y
+
+#writes the installed software package in the formart of Name-installCommand-TimeStamp of when process started
+echo "SoftwarePackage - $strPackageName - $(date +"%s")">>$strFileName
+
+#increments the while loop counter
+((intCounter++))
+done
+
+#finds the length of the additionalConfig array attribute associated with the index matching the intTicketID variable
+intTotalConfig=$(echo "$arrResults" | jq --arg intTicketID "$intTicketID" '.[] | select(.ticketID == ($intTicketID | tonumber)) | .additionalConfigs | length')
+
+#while-loop that will iterate over all of the additionalConfigs within the additionalConfigs array
+intCounter=0
+while [ $intCounter -lt $intTotalConfig ]; do
+
+#reads in the command that will be executed to preform the corresponding additionalConfig
+additionalConfigs=$(echo "$arrResults" | jq -r --arg intTicketID "$intTicketID" --argjson intCounter "$intCounter" '.[] | select(.ticketID == ($intTicketID | tonumber)) | .additionalConfigs[$intCounter | tonumber].config')
+
+#reads in the name/discription of what the corresonding command we read into additionalConfigs does
+strAdditionalConfigsName=$(echo "$arrResults" | jq -r --arg intTicketID "$intTicketID" --argjson intCounter "$intCounter" '.[] | select(.ticketID == ($intTicketID | tonumber)) | .additionalConfigs[$intCounter | tonumber].name')
+
+#runs the command with sudo as to avoid any potential issues with permissions
+eval "sudo $additionalConfigs"
+
+#outputs the AdditionalConfigs we just completed to the TicketId file in the format of AdditionalConfig-name/discription-date and time stamp process started
+echo "AdditionalConfig - $strAdditionalConfigsName - $(date +"%s")">>$strFileName
+
+#increments while-loop
+((intCounter++))
+done
+
+echo " " >> $strFileName
+
+#while-loop that will check all of the software packages that we installed and document their current versions to the file associated with the ticketID
+intCounter=0
+while [ $intCounter -lt $intLength ]; do
+
+#Reads in the software package install name from the software packages array associated with the ticketID
+softwarePackage=$(echo "$arrResults" | jq -r --arg intTicketID "$intTicketID" --argjson intCounter "$intCounter" '.[] | select(.ticketID == ($intTicketID | tonumber)) | .softwarePackages[$intCounter | tonumber].install')
+
+#reads in the software package name for the software packages array index associated with the ticketID
+strPackageName=$(echo "$arrResults" | jq -r --arg intTicketID "$intTicketID" --argjson intCounter "$intCounter" '.[] | select(.ticketID == ($intTicketID | tonumber)) | .softwarePackages[$intCounter | tonumber].name')
+
+#calls the command that checks what version is running and uses awk to remove all the unnecessary data leaving just the version number 
+intVersion=$(dpkg -s $softwarePackage | grep -i version | awk '{print $2}' | cut -d '-' -f 1)
+
+#writes all the versions to the file associated with the ticketID in the fomrat of VersionCheck-SoftwarePackage name- version number
+echo "Version Check - $strPackageName - $intVersion">>$strFileName
+
+#increments the while loop
+((intCounter++))
+done
+
+echo " " >> $strFileName
+
+#curls the URL associated with the ticketID that will hold the "TicketClosed" status message
+strFinalStatus=$(curl "https://www.swollenhippo.com/ServiceNow/systems/devTickets/completed.php?TicketID=${intTicketID}")
+#assigns the ticketClosed message to strStatus variable
+strStatus=$(echo "$strFinalStatus" | jq -r '.outcome')
+
+#writes the TicketClosed message to the file associated with the TicketID
+echo $strStatus >> $strFileName
+echo " " >> $strFileName
+
+#reads in the current date and time in order to show when the process was finished
+current_date=$(date +"%d-%b-%Y %H:%M")
+
+#writes the completed date and time to the end of the file
+echo "Completed: $current_date" >> $strFileName
+
+#clears the screen after running all of the commands
+clear
